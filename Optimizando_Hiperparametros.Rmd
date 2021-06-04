@@ -1,0 +1,357 @@
+---
+title: "Optimizando parámetros"
+author: "Lina María Moreno <br/> Juan David Valencia<br/> Camilo Andrés Figueroa <br/> Joan Sebastian Jiménez <br/> **Universidad Nacional de Colombia - Sede Medellín <br/> Decisiones bajo incertidumbre (Optimización para aprendizaje de máquina)<br/> Repositorio del codigo: <https://github.com/josjimenezja/Optimizando_hiperparamentros> <br/> Documento de la actividad anterior: <https://github.com/josjimenezja/Optimizar_es_divertirse_DBI> <br/><br/>Semestre 2021-01 **"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(knitr)
+library(caTools)
+library(ggplot2)
+library(caret)
+
+```
+
+## Planteamiento del problema
+
+Los modelos de aprendizaje de maquinas suelen requerir de varias iteraciones en busqueda de hiperparametros optimizados. Es por ello que existen paquetes como <code>caret</code>, el cual incluye una serie de funciones que facilitan el uso de decenas de metodos complejos de clasificacion y regresion. Utilizar este paquete en lugar de las fuciones originales de los metodos presenta dos ventajas:
+
++ Permite implementar un unico codigo donde se pueden aplicar reglas de clasificacion muy distintas las cuales se implementan normalemente en distintos paquetes.
+
++ Es mas sencillo poner en práctica algunos procedimientos usuales en problemas de clasificación. Por ejemplo, hay funciones especificas que permiten dividir las muestras en datos de entrenamiento y validacion a su vez que permite ajustar parametros mediante validacion cruzada.
+
+En este documento nos centraremos en optimizar los hiperparametros de dos de los seis modelos utilizados en la actividad anterior (_consultar enlace en la parte superior_), utilizando <code>caret</code>.
+
+**Nota:** El analisis descriptivo no se agrega al documento final debido a que ya fue realizado en la actividad anterior-
+
+### 1.Modelos a optimizar
+
+**1.1 Maquinas de Soporte Vectorial (SVM)**
+
+Este modelo se fundamenta en encontrar los hiperplanos que mejor dividan el dataset, a los hiperplanos se les agrega unos vectores cercanos que en conjunto hacen las veces de margen sobre para los datos, permitiendo más flexibilidad y control sobre el modelo.
+
+A continuacion se muestra el proceso de lectura y normalizacion de los datos.
+
+```{r, include=TRUE}
+# Se cargan los datos del archivo en formato csv
+datos <- read.csv("real_estate_valuation_dataset.csv",
+                  sep = ";", dec = ",")
+
+# Se le asignan etiquetas a cada columna
+names(datos)<-c('Numero', 'Fechatransaccion', 'Edadcasa', 'MRTDistance', 'NTiendas', 'Latitud', 'Longitud', 'Priceperarea')
+
+# Se filtran algunas columnas
+sub_datos_svm <-  subset(datos, select = c('Edadcasa', 'MRTDistance', 'NTiendas', 'Priceperarea'))
+
+#Hacemos el escalamiento de las variables
+sub_datos_svm_scale <- scale(sub_datos_svm, center=TRUE, scale=TRUE)#Escala a media cero
+medias <- attr(sub_datos_svm_scale, "scaled:center")
+desv_est <- attr(sub_datos_svm_scale, "scaled:scale")
+datos_subc_scale <- as.data.frame(sub_datos_svm_scale)
+
+#Hacemos el escalamiento solo de Y (precio)
+sub_datos_svm_scale_Y <- scale(sub_datos_svm$Priceperarea, center=TRUE, scale=TRUE)#Escala a media cero
+media_Y <- attr(sub_datos_svm_scale_Y, "scaled:center")
+desv_est_Y <- attr(sub_datos_svm_scale_Y, "scaled:scale")
+```
+
+Luego de procesamiento basico de los datos, se separaron los datos en dos conjuntos, uno de entrenamiento y otro de testeo.
+
+```{r, include=TRUE}
+# Dividimos el dataset para entrenamiento y testeo
+set.seed(1)
+sample = sample.split(sub_datos_svm_scale[,4], SplitRatio = 0.8)
+train = subset(sub_datos_svm_scale, sample == TRUE)
+test  = subset(sub_datos_svm_scale, sample == FALSE)
+```
+
+Despues de tener los datos en dos conjuntos de muestras se prepara la malla de hiperparamentros para escoger la mejor combinacion.
+
+```{r, echo=FALSE}
+# Definimos los valores de hiperámetros para la malla y escoger la mejor combinación, el número de repeticiones  y semillas para cada iteación
+
+particiones  <- 10
+repeticiones <- 5
+
+# Hiperparámetros
+hiperparametros <- expand.grid(sigma = c( 0.1, 0.2, 0.3, 0.4, 0.5),
+                               C = c( 15, 20, 25, 30, 35, 45))
+
+kable(head(hiperparametros))
+```
+
+Por último entrenamos el modelo con el metodo de evaluación SMV Radial, obteniendo los siguientes resultados:
+
+```{r, include=FALSE}
+set.seed(123)
+seeds <- vector(mode = "list", length = (particiones * repeticiones) + 1)
+for (i in 1:(particiones * repeticiones)) {
+  seeds[[i]] <- sample.int(1000, nrow(hiperparametros))
+}
+seeds[[(particiones * repeticiones) + 1]] <- sample.int(1000, 1)
+
+
+control_train <- trainControl(method = "repeatedcv",
+                        number = particiones,
+                        repeats = repeticiones,
+                        seeds = seeds,
+                        verboseIter = FALSE,
+                        returnResamp = "final",
+                        allowParallel = TRUE)
+
+
+set.seed(2)
+svm_model_opt <- train(Priceperarea ~ ., data = train,
+                      method = "svmRadial",
+                      tuneGrid = hiperparametros,
+                      metric = "RMSE",
+                      trControl = control_train)
+```
+
+```{r ,echo=FALSE}
+kable(head(svm_model_opt$results))
+```
+
+```{r ,echo=FALSE}
+svm_model_opt$finalModel
+```
+
+Como indican los autores de _"A Practical Guide to Support Vector Classification"_, es recomendable probar el kernel radial. Este kernel tiene dos ventajas: que solo tiene dos hiperparámetros a optimizar (sigma y la penalización C común a todos los SVM) y que su flexibilidad puede ir desde un clasificador lineal a uno muy complejo. De acuerdo a esto, en primera instancia entrenamos con un modelo SVM Lineal obteniendo un error de entrenamiento del 49%, mientras que con SVM radial obtuvimos un error del 33,9%, reduciendo así el error drásticamente en 15 puntos porcentuales.
+
+```{r ,echo=FALSE}
+svm_model_opt$bestTune
+```
+
+La malla para encontrar los hiperparámetros con mejor desempeño en el modelo los asignamos con un sigma entre ( 0.1, 0.2, 0.3, 0.4, 0.5) y una penalización C entre (15, 20, 25, 30, 35, 45), de los cuales los de mejor desempeño fueron 0.3 y 30 respectivamente.
+
+```{r ,echo=FALSE}
+kable(getTrainPerf(svm_model_opt))
+```
+
+
+```{r ,fig.align = 'center',echo=FALSE}
+# Representación gráfica
+ggplot(svm_model_opt, highlight = TRUE) +
+  labs(title = "Evolución del RMSE del modelo SVM Radial") +
+  theme_bw()
+```
+
+En la gráfica observamos cómo a través de los diferentes valores de sigma establecidos en la malla se mueve el costo y el RMSE, siendo sigma de 0.3 y C de 30 efectivamente los de menor RMSE.
+
+```{r ,include=FALSE}
+# Modelo de predicción
+pred_SVM <- predict(svm_model_opt, newdata = test)
+Y_test = test[,4]
+RMSE_pred_SVM = RMSE(pred_SVM, Y_test)
+
+# desnormalizar la predicción y los datos Y (precio) del testeo
+pred_SVM_real <- pred_SVM* attr(sub_datos_svm_scale_Y, 'scaled:scale') + attr(sub_datos_svm_scale_Y, 'scaled:center')
+Y_test_real <- Y_test* attr(sub_datos_svm_scale_Y, 'scaled:scale') + attr(sub_datos_svm_scale_Y, 'scaled:center')
+
+# RMSE en la escala original de los datos
+RMSE_pred_SVM_real = RMSE(pred_SVM_real, Y_test_real)
+```
+
+**RMSE de los datos desnormalizados: **
+
+```{r ,echo=FALSE}
+RMSE_pred_SVM_real
+```
+
+
+Luego de desnormalizar los datos, calculamos el RMSE del precio por área predicho por el modelo optimizado Vs el conjunto de testeo, obteniendo un RMSE de 7.35.
+
+**1.2 RandomForest**
+
+Para optimizar el modelo utilizaremos la funcion <code>ranger</code> como paquete adicional de <code>caret</code> el cual busca optimizar 3 parametros, mtry, min.node.size y splitrule.
+
++ **mtry:** Precitores seleccionados aleatoriamente en cada arbol.
++ **min.node.size:** Tamaño minimo de muestras que tiene un nodo para poder ser dividido.
++ **splitrule: ** Criterio de division.
+
+_(Caret incluye por defecto la funcion <code>rf()</code> de RandomForest, pero solo permite optimizar el mtry)_
+
+A continuacion se muestra el proceso de lectura de datos para este modelo.
+
+```{r ,include=TRUE}
+# Se cargan los datos del archivo en formato csv
+datos <- read.csv("real_estate_valuation_dataset.csv", sep = ";", dec = ",")
+
+# Se le asignan etiquetas a cada columna
+datos_subc <-subset(datos, select = c("X2","X3","X4","X5","X6","Y"))
+
+# Se filtran algunas columnas 
+names(datos)<-c('Numero', 'Fechatransaccion', 'Edadcasa', 'MRTDistance', 'NTiendas', 'Latitud', 'Longitud', 'Priceperarea')
+
+# Random Forest no necesita normalización porque es simplemente un proceso de spliteo sobre datos
+sub_datos_rf <-  subset(datos, select = c('Edadcasa', 'MRTDistance', 'NTiendas', 'Priceperarea'))
+```
+
+Como se observa y tambien se menciona en el codigo anterior, para el caso de RandomForest no se normalizan los datos ya que para este modelo es relevante este proceso, por lo que se procede directamente a separar los datos en los conjutos de entrenamiento y validacion como en el modelo anterior.
+
+```{r ,include= TRUE}
+# Dividimos el dataset para entrenamiento y testeo
+set.seed(99)
+sample = sample.split(sub_datos_rf$Priceperarea, SplitRatio = 0.8)
+train = subset(sub_datos_rf, sample == TRUE)
+test  = subset(sub_datos_rf, sample == FALSE)
+```
+
+Por consiguiente creamos la malla con los hiperparamentros para escoger la mejor combinacion.
+
+```{r ,echo = FALSE}
+# Definimos los valores de hiperámetros para la malla y escoger la mejor combinación, el número de repeticiones  y semillas para cada iteación
+
+particiones<-10
+iteraciones<-5
+
+# Selección de hiperparametros, gini es para clasificación
+# para regresión se puede utilizar {variance, extratrees, max-stat(x) o beta(necesita normalización{0,1})}
+# por defecto para regresion es variance
+params<-expand.grid(mtry = c(1, 2, 3),
+                    min.node.size = c(1, 2, 3, 4, 5, 6, 7, 10, 15, 20),
+                    splitrule= 'variance')
+
+set.seed(99)
+seeds <- vector(mode = "list", length = (particiones * iteraciones) + 1)
+for (i in 1:(particiones * iteraciones)) {
+  seeds[[i]] <- sample.int(1000, nrow(params))
+}
+seeds[[(particiones * iteraciones) + 1]] <- sample.int(1000, 1)
+
+kable(head(params))
+```
+
+Entrenamos el modelo obteniendo los sigueintes resultados:
+
+```{r echo=FALSE}
+#Definición del entrenamiento
+control_train <- trainControl(method = "repeatedcv", number = particiones,
+                              repeats = iteraciones, seeds = seeds,
+                              returnResamp = "final", verboseIter = FALSE,
+                              allowParallel = TRUE)
+
+
+set.seed(99)
+modelo_rf <- train(Priceperarea ~ ., data = train,
+                   method = "ranger",
+                   tuneGrid = params,
+                   metric = "RMSE",
+                   trControl = control_train,
+                   num.trees = 500)
+
+modelo_rf$bestTune
+```
+
+A partir del paremetro <code>Splitrule</code> definido como <code>varianza</code> se obtuvieron los siguientes RMSE.
+
+**RMSE de entrenamiento:**
+
+```{r ,echo=FALSE}
+y_pred<-predict(modelo_rf, test[-4])
+
+# train
+RMSE(predict(modelo_rf, train[-4]),train$Priceperarea)
+```
+
+**RMSE de testeo:**
+
+```{r ,echo=FALSE}
+# test
+RMSE(y_pred,test$Priceperarea)
+```
+
+
+```{r ,fig.align = 'center',echo=FALSE}
+
+#interesante que las gráficas dan bien diferente variance vs extratrees
+ggplot(modelo_rf, highlight = TRUE) +
+  scale_x_continuous(breaks = 1:30) +
+  labs(title = "Evolución del RMSE optimizando el modelo Random Forest") +
+  guides(color = guide_legend(title = "mtry"),
+         shape = guide_legend(title = "mtry")) +
+  theme_bw()
+
+```
+
+Teniedo el parametro <code>Splitrule</code> como <code>varianza</code> y seleccionando el modelo optimo a partir del menor RMSE se obtuvieron los valores de mtry = 2 y el min.node.size = 5.
+
+Se cambia el parametro de <code>Splitrule</code> por <code>extratrees</code> y se analiza la misma malla.
+
+```{r ,echo=FALSE}
+#Ahora "extratrees"
+params<-expand.grid(mtry = c(1, 2, 3),
+                    min.node.size = c(1, 2, 3, 4, 5, 6, 7, 10, 15, 20),
+                    splitrule= 'extratrees')
+
+set.seed(99)
+seeds <- vector(mode = "list", length = (particiones * iteraciones) + 1)
+for (i in 1:(particiones * iteraciones)) {
+  seeds[[i]] <- sample.int(1000, nrow(params))
+}
+seeds[[(particiones * iteraciones) + 1]] <- sample.int(1000, 1)
+
+#Definición del entrenamiento
+control_train <- trainControl(method = "repeatedcv", number = particiones,
+                              repeats = iteraciones, seeds = seeds,
+                              returnResamp = "final", verboseIter = FALSE,
+                              allowParallel = TRUE)
+
+
+set.seed(99)
+modelo_rf <- train(Priceperarea ~ ., data = train,
+                   method = "ranger",
+                   tuneGrid = params,
+                   metric = "RMSE",
+                   trControl = control_train,
+                   num.trees = 500)
+
+modelo_rf$bestTune
+```
+
+A partir del paremetro <code>Splitrule</code> definido como <code>extratrees</code> se obtuvieron los siguientes RMSE.
+
+**RMSE de entrenamiento:**
+
+```{r echo=FALSE}
+y_pred<-predict(modelo_rf, test[-4])
+#train
+RMSE(predict(modelo_rf, train[-4]),train$Priceperarea)
+```
+
+**RMSE de testeo:**
+
+```{r echo=FALSE}
+# test
+RMSE(y_pred,test$Priceperarea)
+```
+
+
+```{r ,fig.align = 'center',echo=FALSE}
+#interesante que las gráficas dan bien diferente variance vs extratrees
+ggplot(modelo_rf, highlight = TRUE) +
+  scale_x_continuous(breaks = 1:30) +
+  labs(title = "Evolución del RMSE optimizando el modelo Random Forest") +
+  guides(color = guide_legend(title = "mtry"),
+         shape = guide_legend(title = "mtry")) +
+  theme_bw()
+
+```
+
+Teniedo el parametro <code>Splitrule</code> como <code>extratrees</code> y seleccionando el modelo optimo a partir del menor RMSE se obtuvieron los valores de mtry = 2 y el min.node.size = 4.
+
+### 2. ¿Por qué se optimizaron estos modelos?
+
+Se decidió optimizar estos modelos porque se encontró que eran en los que mayores oportunidades existían. En el caso de Random forest al realizar el entrenamiento con los valores por defecto se obtuvieron unos resultados muy por debajo de lo esperado, al  analizar el RMSE de los distintos modelos sobre el conjunto de testeo RF y XGBoost fueron los que tuvieron un peor desempeño. Los métodos de ensamble de árboles son algunos de los modelos que mayores ventajas tienen, además de que no requieren de exhaustivo pre procesamiento (no necesitan normalización), evita el overfitting y otorga información sobre la importancia de cada variable predictora en el modelo, por tanto resultó de gran interés profundizar en los hiperparametros del modelo. Motivados por lo anterior y teniendo en cuenta que para el ejercicio previo se utilizó la librería ‘RandomForest’ y ésta solo permitía la optimización en Caret del parámetro mtry (número de variables consideradas por árbol), se utilizó el método Ranger, que permitía hacer la optimización de mtry, min.node.size y splitrule.  
+En lo que concierne a SVM, el desempeño observado llego a rivalizar con el de la red neuronal (hoy por hoy uno de los métodos más completos). Motivados en profundizar sobre la posibilidad de alcanzar o mejorar los resultados equiparables con un método a priori más costoso a nivel computacional como lo son las redes neuronales, los parámetros que se optimizaron fueron sigma y c. Sin embargo, mediante el desarrollo del trabajo observamos que el random forest tuvo un mejor comportamiento en error de entrenamiento y del RMSE que en SVM.
+
+
+## Bibliografia
++ https://www.cienciadedatos.net/documentos/41_machine_learning_con_r_y_caret#RandomForest
++ http://topepo.github.io/caret/available-models.html
++ https://rpubs.com/joser/caret#:~:text=El%20paquete%20caret%20(classification%20and,complejos%20de%20clasificaci%C3%B3n%20y%20regresi%C3%B3n.&text=Permite%20utilizar%20un%20c%C3%B3digo%20unificado,distintas%2C%20implementadas%20en%20diferentes%20paquetes.
++ https://www.cienciadedatos.net/documentos/34_maquinas_de_vector_soporte_support_vector_machines
+
+
+
